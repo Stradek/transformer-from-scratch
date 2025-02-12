@@ -1,6 +1,6 @@
 import os
+from typing import Union
 import numpy
-import json
 import pickle
 
 
@@ -18,7 +18,7 @@ class TransformerEncoder:
 
         self.reserved_encodings_count = len(self.reserved_encodings)
 
-    def build_vocabulary(self, training_text: str) -> (dict[str, int], dict[int, str]):
+    def build_vocabulary(self, training_text: str) -> Union[dict[str, int], dict[int, str]]:
         # create encoding lookup table
         self.encoding_lookup_table = {}
         for i, char in enumerate(sorted(set(training_text))):
