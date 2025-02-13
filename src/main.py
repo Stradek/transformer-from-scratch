@@ -6,12 +6,10 @@ import numpy as np
 import pickle
 
 
-def initialize_random_weight_matrix(min_value, max_value, size):
-    weight_matrix = np.random.uniform(
-            low = min_value,
-            high = max_value,
-            size = size
-        )
+def initialize_random_weight_matrix(size):
+    dim_sum = np.sum(size)
+    limit = np.sqrt(6 / dim_sum)
+    weight_matrix = np.random.uniform(-limit, limit, size)
     return weight_matrix
 
 
@@ -156,13 +154,11 @@ class TransformerEncoder:
 class SelfAttentionLayer():
     def __init__(self, input_embeddings, embedding_dimension, heads_count):
         head_dim = embedding_dimension // heads_count
-
-        weights_random_max = math.sqrt(6) / embedding_dimension
         weight_matrix_size = (embedding_dimension, embedding_dimension)
 
-        self.W_q = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
-        self.W_k = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
-        self.W_v = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+        self.W_q = initialize_random_weight_matrix(weight_matrix_size)
+        self.W_k = initialize_random_weight_matrix(weight_matrix_size)
+        self.W_v = initialize_random_weight_matrix(weight_matrix_size)
 
         # compute attention scores
         Q_heads = np.dot(input_embeddings, self.W_q)
@@ -183,12 +179,17 @@ class SelfAttentionLayer():
             K_head = np.squeeze(K_heads_list[i], axis=1)
             V_head = np.squeeze(V_heads_list[i], axis=1)
             raw_attention_scores = np.dot(Q_head, K_head.T)
-            raw_attention_scores /= np.sqrt(head_dim) # apply scaling
+            raw_attention_scores /= np.sqrt(head_dim)  # apply scaling
 
-            attention_weights = np.exp(raw_attention_scores) / np.sum(np.exp(raw_attention_scores), axis=1, keepdims=True)
+            # numerical stability trick
+            max_raw_attention_scores = np.max(raw_attention_scores, axis=1, keepdims=True)
+            stable_attention_scores = raw_attention_scores - max_raw_attention_scores
+
+            attention_weights = np.exp(stable_attention_scores) / np.sum(np.exp(stable_attention_scores), axis=1, keepdims=True)
 
             row_sums = np.sum(attention_weights, axis=1)
-            assert np.allclose(row_sums, np.ones(attention_weights.shape[0]))
+            row_ones = np.ones(attention_weights.shape[0])
+            assert np.allclose(row_sums, row_ones)
 
             attention_output = np.dot(attention_weights, V_head)
             attention_outputs.append(attention_output)
@@ -252,9 +253,7 @@ def main():
 
     self_attention_layer.W_o.reshape(1, input_sequence_length, embedding_dimension)
 
-
-
-    breakpoint()
+    pass
 
 if __name__ == "__main__":
     main()
