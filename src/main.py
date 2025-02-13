@@ -247,11 +247,27 @@ def main():
     embedding_dimension = transformer_encoder.get_embedding_dimension()
 
     self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
-
+    self_attention_layer_output = self_attention_layer.W_o
+    
     # apply the position-wise feed-forward layer
     hidden_dimension = embedding_dimension * 4
 
-    self_attention_layer.W_o.reshape(1, input_sequence_length, embedding_dimension)
+    self_attention_layer_output.reshape(1, input_sequence_length, embedding_dimension)
+
+    W_1 = initialize_random_weight_matrix((embedding_dimension, hidden_dimension))
+    b_1 = np.zeros(hidden_dimension)
+
+    W_2 = initialize_random_weight_matrix((hidden_dimension, embedding_dimension))
+    b_2 = np.zeros(embedding_dimension)
+
+    H = np.dot(self_attention_layer_output, W_1) + b_1
+    shape_H = H.shape
+    
+    # standard Gaussian cumulative distribution function (CDF) approximation
+    CDF_distribution = np.full(shape_H, np.e)**-H
+    GELU_H = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+
+    FFN_output = np.dot(GELU_H, W_2) + b_2
 
     pass
 
