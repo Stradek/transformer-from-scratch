@@ -198,8 +198,8 @@ class SelfAttentionLayer():
 
         assert concatenated_attention_output.shape[-1] == embedding_dimension
 
-        self.W_o = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
-        self.W_o = np.dot(concatenated_attention_output, self.W_o)
+        self.output = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
+        self.output = np.dot(concatenated_attention_output, self.output)
 
 
 class FeedForwardLayer():
@@ -221,8 +221,19 @@ class FeedForwardLayer():
         CDF_distribution = np.full(shape_H, np.e)**-H
         H_GELU = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
 
-        self.FFN_output = np.dot(H_GELU, W_2) + b_2
+        self.output = np.dot(H_GELU, W_2) + b_2
 
+
+class LayerNorm():
+    def __init__(self, self_attention_layer_output, FFN_output):
+        residual_connection = self_attention_layer_output + FFN_output
+        mean = np.mean(residual_connection, axis=-1, keepdims=True)
+        variance = np.var(residual_connection, axis=-1, keepdims=True)
+        epsilon = np.finfo(float).eps
+        learnable_scale_param = 1
+        learnable_shift_param = 0
+
+        self.output = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
 
 def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
     encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
@@ -269,20 +280,15 @@ def main():
     embedding_dimension = transformer_encoder.get_embedding_dimension()
 
     self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
-    self_attention_layer_output = self_attention_layer.W_o
+    self_attention_layer_output = self_attention_layer.output
     
     # apply the position-wise feed-forward layer
-    FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
+    feedforward_layer = FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
+    FFN_output = feedforward_layer.output
     
     # normalize layers
-    residual_connection = self_attention_layer_output + FFN_output
-    mean = np.mean(residual_connection, axis=-1, keepdims=True)
-    variance = np.var(residual_connection, axis=-1, keepdims=True)
-    epsilon = np.finfo(float).eps
-    learnable_scale_param = 1
-    learnable_shift_param = 0
-
-    layer_norm_output = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
+    layer_norm = LayerNorm(self_attention_layer_output, FFN_output)
+    layer_norm_output = layer_norm.output
 
 
     pass
