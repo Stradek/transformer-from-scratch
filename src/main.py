@@ -13,6 +13,11 @@ def initialize_random_weight_matrix(size):
     return weight_matrix
 
 
+def softmax(input_matrix):
+    return np.exp(input_matrix) / np.sum(np.exp(input_matrix), axis=1, keepdims=True)
+    
+
+
 class TransformerEncoder:
     def __init__(self):
         self.embedding_dimension = 128
@@ -59,7 +64,7 @@ class TransformerEncoder:
             self.char_encoding_lookup_table[uid] = char
             self.char_decoding_lookup_table[uid] = char
 
-        vocabulary_size = len(self.char_encoding_lookup_table)
+        self.vocabulary_size = len(self.char_encoding_lookup_table)
 
         # initialize embeddings_matrix with random values
         embedding_random_value_max = 1 / math.sqrt(self.embedding_dimension)
@@ -68,7 +73,7 @@ class TransformerEncoder:
         self.embedding_matrix = np.random.uniform(
             low=embedding_random_value_min,
             high=embedding_random_value_max,
-            size=(vocabulary_size, self.embedding_dimension)
+            size=(self.vocabulary_size, self.embedding_dimension)
         )
 
         # build embedding decoding lookup table
@@ -84,10 +89,6 @@ class TransformerEncoder:
                     self.positional_encoding_matrix[x][y] = math.sin(x / (10000 ** (y / self.embedding_dimension)))
                 else:
                     self.positional_encoding_matrix[x][y] = math.cos(x / (10000 ** (y / self.embedding_dimension)))
-
-
-    def get_vocabulary_size(self):
-        return len(self.char_encoding_lookup_table)
 
 
     def find_embedding_vector_id(self, embedding_vector: np.ndarray) -> int:
@@ -185,7 +186,7 @@ class SelfAttentionLayer():
             max_raw_attention_scores = np.max(raw_attention_scores, axis=1, keepdims=True)
             stable_attention_scores = raw_attention_scores - max_raw_attention_scores
 
-            attention_weights = np.exp(stable_attention_scores) / np.sum(np.exp(stable_attention_scores), axis=1, keepdims=True)
+            attention_weights = softmax(stable_attention_scores)
 
             row_sums = np.sum(attention_weights, axis=1)
             row_ones = np.ones(attention_weights.shape[0])
@@ -204,22 +205,22 @@ class SelfAttentionLayer():
 
 class FeedForwardLayer():
     def __init__(self, self_attention_layer_output, embedding_dimension, input_sequence_length):
-        hidden_dimension = embedding_dimension * 4
+        self.hidden_dimension = embedding_dimension * 4
 
         self_attention_layer_output.reshape(1, input_sequence_length, embedding_dimension)
 
-        W_1 = initialize_random_weight_matrix((embedding_dimension, hidden_dimension))
-        b_1 = np.zeros(hidden_dimension)
+        W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
+        b_1 = np.zeros(self.hidden_dimension)
 
-        W_2 = initialize_random_weight_matrix((hidden_dimension, embedding_dimension))
+        W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
         b_2 = np.zeros(embedding_dimension)
 
-        H = np.dot(self_attention_layer_output, W_1) + b_1
-        shape_H = H.shape
+        self.H = np.dot(self_attention_layer_output, W_1) + b_1
+        shape_H = self.H.shape
         
         # standard Gaussian cumulative distribution function (CDF) approximation
-        CDF_distribution = np.full(shape_H, np.e)**-H
-        H_GELU = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+        CDF_distribution = np.full(shape_H, np.e)**-self.H
+        H_GELU = self.H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
 
         self.output = np.dot(H_GELU, W_2) + b_2
 
@@ -271,25 +272,50 @@ def main():
     # test encoding and decoding
     test_encoding_and_decoding(transformer_encoder, training_text)
 
-    # encode input to embeddings
-    input_embeddings = transformer_encoder.encode(training_text)
-    input_sequence_length = input_embeddings.shape[0]
+    training_chunk_size = 128
+    training_chunks_num = len(training_text)
 
-    # build self-attention layer
-    heads_count = 8
-    embedding_dimension = transformer_encoder.get_embedding_dimension()
+    # generate training data chunks
+    training_text_chunks_list = []
+    for i in range(training_chunks_num // training_chunk_size):
+        chunk_start = i*training_chunk_size
+        chunk_end = min(chunk_start + training_chunk_size, training_chunks_num)
+        
+        text_chunk = training_text[chunk_start:chunk_end]
+        training_text_chunks_list.append(text_chunk)
 
-    self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
-    self_attention_layer_output = self_attention_layer.output
-    
-    # apply the position-wise feed-forward layer
-    feedforward_layer = FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
-    FFN_output = feedforward_layer.output
-    
-    # normalize layers
-    layer_norm = LayerNorm(self_attention_layer_output, FFN_output)
-    layer_norm_output = layer_norm.output
+    for training_text_chunk in training_text_chunks_list:
+        # encode input to embeddings
+        input_embeddings = transformer_encoder.encode(training_text_chunk)
+        input_sequence_length = input_embeddings.shape[0]
 
+        # build self-attention layer
+        heads_count = 8
+        embedding_dimension = transformer_encoder.get_embedding_dimension()
+
+        self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
+        self_attention_layer_output = self_attention_layer.output
+        
+        # apply the position-wise feed-forward layer
+        feedforward_layer = FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
+        FFN_output = feedforward_layer.output
+        
+        # normalize layers
+        layer_norm = LayerNorm(self_attention_layer_output, FFN_output)
+        layer_norm_output = layer_norm.output
+
+        # apply final linear transformation (projection to vocabulary space)
+        vocab_size = transformer_encoder.vocabulary_size
+        hidden_dimension = feedforward_layer.hidden_dimension
+
+        W_vocab = initialize_random_weight_matrix((embedding_dimension, vocab_size))
+        b_vocab = np.zeros(vocab_size)
+
+        layer_norm_output.reshape(1, input_sequence_length, embedding_dimension)
+
+        logits = np.dot(layer_norm_output, W_vocab) + b_vocab
+        probabilities = softmax(logits)
+        predicted_tokens = np.argmax(probabilities, axis=-1)
 
     pass
 
