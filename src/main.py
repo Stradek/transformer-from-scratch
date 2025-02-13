@@ -265,9 +265,19 @@ def main():
     
     # standard Gaussian cumulative distribution function (CDF) approximation
     CDF_distribution = np.full(shape_H, np.e)**-H
-    GELU_H = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+    H_GELU = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
 
-    FFN_output = np.dot(GELU_H, W_2) + b_2
+    FFN_output = np.dot(H_GELU, W_2) + b_2
+    
+    # normalize layers
+    residual_connection = self_attention_layer_output + FFN_output
+    mean = np.mean(residual_connection, axis=-1, keepdims=True)
+    variance = np.var(residual_connection, axis=-1, keepdims=True)
+    epsilon = np.finfo(float).eps
+    learnable_scale_param = 1
+    learnable_shift_param = 0
+
+    norm_layer = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
 
     pass
 
