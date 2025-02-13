@@ -202,6 +202,28 @@ class SelfAttentionLayer():
         self.W_o = np.dot(concatenated_attention_output, self.W_o)
 
 
+class FeedForwardLayer():
+    def __init__(self, self_attention_layer_output, embedding_dimension, input_sequence_length):
+        hidden_dimension = embedding_dimension * 4
+
+        self_attention_layer_output.reshape(1, input_sequence_length, embedding_dimension)
+
+        W_1 = initialize_random_weight_matrix((embedding_dimension, hidden_dimension))
+        b_1 = np.zeros(hidden_dimension)
+
+        W_2 = initialize_random_weight_matrix((hidden_dimension, embedding_dimension))
+        b_2 = np.zeros(embedding_dimension)
+
+        H = np.dot(self_attention_layer_output, W_1) + b_1
+        shape_H = H.shape
+        
+        # standard Gaussian cumulative distribution function (CDF) approximation
+        CDF_distribution = np.full(shape_H, np.e)**-H
+        H_GELU = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+
+        self.FFN_output = np.dot(H_GELU, W_2) + b_2
+
+
 def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
     encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
     decoded_text = transformer_encoder.decode(encoded_text)
@@ -250,24 +272,7 @@ def main():
     self_attention_layer_output = self_attention_layer.W_o
     
     # apply the position-wise feed-forward layer
-    hidden_dimension = embedding_dimension * 4
-
-    self_attention_layer_output.reshape(1, input_sequence_length, embedding_dimension)
-
-    W_1 = initialize_random_weight_matrix((embedding_dimension, hidden_dimension))
-    b_1 = np.zeros(hidden_dimension)
-
-    W_2 = initialize_random_weight_matrix((hidden_dimension, embedding_dimension))
-    b_2 = np.zeros(embedding_dimension)
-
-    H = np.dot(self_attention_layer_output, W_1) + b_1
-    shape_H = H.shape
-    
-    # standard Gaussian cumulative distribution function (CDF) approximation
-    CDF_distribution = np.full(shape_H, np.e)**-H
-    H_GELU = H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
-
-    FFN_output = np.dot(H_GELU, W_2) + b_2
+    FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
     
     # normalize layers
     residual_connection = self_attention_layer_output + FFN_output
@@ -277,7 +282,8 @@ def main():
     learnable_scale_param = 1
     learnable_shift_param = 0
 
-    norm_layer = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
+    layer_norm_output = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
+
 
     pass
 
