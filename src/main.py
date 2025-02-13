@@ -23,6 +23,13 @@ class TransformerEncoder:
             },
         }
         self.reserved_encodings_count = len(self.reserved_encodings)
+
+    def get_embedding_dimension(self):
+        return self.embedding_dimension
+    
+
+    def get_max_sequence_length(self):
+        return self.max_sequence_length
     
 
     def build_vocabulary(self, training_text: str) -> Union[dict[str, int], dict[int, str]]:
@@ -142,6 +149,15 @@ def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training
     decoded_text = transformer_encoder.decode(encoded_text)
     assert training_text == decoded_text
 
+def initialize_random_weight_matrix(min_value, max_value, size):
+    weight_matrix = np.random.uniform(
+            low = min_value,
+            high = max_value,
+            size = size
+        )
+    
+    return weight_matrix
+
 def main():
     working_dir = os.getcwd()
     training_dataset_path = os.path.join(working_dir, "data", "polish_novel.txt")
@@ -172,11 +188,63 @@ def main():
     # test encoding and decoding
     test_encoding_and_decoding(transformer_encoder, training_text)
 
-    # embedding layer
-    # TODO: Implement Xavier/Glorot embedding matrix initialization 
+    # encode input to embeddings
+    input_embeddings = transformer_encoder.encode(training_text)
+    input_embeddings_sequence_length = input_embeddings[0]
+
+    # build self-attention layer
+    num_heads = 8
+    embedding_dimension = transformer_encoder.get_embedding_dimension()
+    head_dim = embedding_dimension // num_heads
+
+    weights_random_max = math.sqrt(6) / embedding_dimension
+    weight_matrix_size = (embedding_dimension, embedding_dimension)
+
+    query_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+    key_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+    value_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+
+    # compute attention scores
+    Q_heads = np.dot(input_embeddings, query_weights_matrix)
+    K_heads = np.dot(input_embeddings, key_weights_matrix)
+    V_heads = np.dot(input_embeddings, value_weights_matrix)
+
+    Q_heads = np.reshape(Q_heads, (-1, num_heads, head_dim))
+    K_heads = np.reshape(K_heads, (-1, num_heads, head_dim))
+    V_heads = np.reshape(V_heads, (-1, num_heads, head_dim))
+
+    Q_heads_list = np.split(Q_heads, num_heads, axis=1)
+    K_heads_list = np.split(K_heads, num_heads, axis=1)
+    V_heads_list = np.split(V_heads, num_heads, axis=1)
+
+    attention_outputs = []
+    for i in range(num_heads):
+        Q_head = np.squeeze(Q_heads_list[i], axis=1)
+        K_head = np.squeeze(K_heads_list[i], axis=1)
+        V_head = np.squeeze(V_heads_list[i], axis=1)
+        raw_attention_scores = np.dot(Q_head, K_head.T)
+        raw_attention_scores /= np.sqrt(head_dim) # apply scaling
+
+        mask = np.triu(np.ones_like(raw_attention_scores), k=1) * -1e9
+        raw_attention_scores += mask
 
 
+        attention_weights = np.exp(raw_attention_scores) / np.sum(np.exp(raw_attention_scores), axis=1, keepdims=True)
 
+        row_sums = np.sum(attention_weights, axis=1)
+        assert np.allclose(row_sums, np.ones(attention_weights.shape[0]))
+
+        attention_output = np.dot(attention_weights, V_head)
+        attention_outputs.append(attention_output)
+
+    concatenated_attention_output = np.concatenate(attention_outputs, axis=-1)
+
+    assert concatenated_attention_output.shape[-1] == embedding_dimension
+
+    learning_weigth_matrix = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
+    learning_weigth_matrix = np.dot(concatenated_attention_output, learning_weigth_matrix)
+
+    
 
 if __name__ == "__main__":
     main()
