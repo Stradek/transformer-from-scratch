@@ -5,6 +5,15 @@ import numpy as np
 import pickle
 
 
+def initialize_random_weight_matrix(min_value, max_value, size):
+    weight_matrix = np.random.uniform(
+            low = min_value,
+            high = max_value,
+            size = size
+        )
+    return weight_matrix
+
+
 class TransformerEncoder:
     def __init__(self):
         self.embedding_dimension = 128
@@ -73,9 +82,9 @@ class TransformerEncoder:
         for x in range(self.max_sequence_length):
             for y in range(self.embedding_dimension):
                 if y%2 == 0:
-                    self.positional_encoding_matrix[x][y] = math.sin(x / (10000 ** (2 * y / self.embedding_dimension)))
+                    self.positional_encoding_matrix[x][y] = math.sin(x / (10000 ** (y / self.embedding_dimension)))
                 else:
-                    self.positional_encoding_matrix[x][y] = math.cos(x / (10000 ** (2 * y / self.embedding_dimension)))
+                    self.positional_encoding_matrix[x][y] = math.cos(x / (10000 ** (y / self.embedding_dimension)))
 
 
     def get_vocabulary_size(self):
@@ -143,20 +152,59 @@ class TransformerEncoder:
             self.char_decoding_lookup_table = encodings["decoding_lookup_table"]
             self.reserved_encodings = encodings["reserved_encodings"]
 
+class SelfAttentionLayer():
+    def __init__(self, input_embeddings, embedding_dimension, heads_count):
+        head_dim = embedding_dimension // heads_count
+
+        weights_random_max = math.sqrt(6) / embedding_dimension
+        weight_matrix_size = (embedding_dimension, embedding_dimension)
+
+        self.W_q = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+        self.W_k = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+        self.W_v = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
+
+        # compute attention scores
+        Q_heads = np.dot(input_embeddings, self.W_q)
+        K_heads = np.dot(input_embeddings, self.W_k)
+        V_heads = np.dot(input_embeddings, self.W_v)
+
+        Q_heads = np.reshape(Q_heads, (-1, heads_count, head_dim))
+        K_heads = np.reshape(K_heads, (-1, heads_count, head_dim))
+        V_heads = np.reshape(V_heads, (-1, heads_count, head_dim))
+
+        Q_heads_list = np.split(Q_heads, heads_count, axis=1)
+        K_heads_list = np.split(K_heads, heads_count, axis=1)
+        V_heads_list = np.split(V_heads, heads_count, axis=1)
+
+        attention_outputs = []
+        for i in range(heads_count):
+            Q_head = np.squeeze(Q_heads_list[i], axis=1)
+            K_head = np.squeeze(K_heads_list[i], axis=1)
+            V_head = np.squeeze(V_heads_list[i], axis=1)
+            raw_attention_scores = np.dot(Q_head, K_head.T)
+            raw_attention_scores /= np.sqrt(head_dim) # apply scaling
+
+            attention_weights = np.exp(raw_attention_scores) / np.sum(np.exp(raw_attention_scores), axis=1, keepdims=True)
+
+            row_sums = np.sum(attention_weights, axis=1)
+            assert np.allclose(row_sums, np.ones(attention_weights.shape[0]))
+
+            attention_output = np.dot(attention_weights, V_head)
+            attention_outputs.append(attention_output)
+
+        concatenated_attention_output = np.concatenate(attention_outputs, axis=-1)
+
+        assert concatenated_attention_output.shape[-1] == embedding_dimension
+
+        self.W_o = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
+        self.W_o = np.dot(concatenated_attention_output, self.W_o)
+
 
 def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
     encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
     decoded_text = transformer_encoder.decode(encoded_text)
     assert training_text == decoded_text
 
-def initialize_random_weight_matrix(min_value, max_value, size):
-    weight_matrix = np.random.uniform(
-            low = min_value,
-            high = max_value,
-            size = size
-        )
-    
-    return weight_matrix
 
 def main():
     working_dir = os.getcwd()
@@ -190,61 +238,16 @@ def main():
 
     # encode input to embeddings
     input_embeddings = transformer_encoder.encode(training_text)
-    input_embeddings_sequence_length = input_embeddings[0]
+    input_sequence_length = input_embeddings.shape[0]
 
     # build self-attention layer
-    num_heads = 8
+    heads_count = 8
     embedding_dimension = transformer_encoder.get_embedding_dimension()
-    head_dim = embedding_dimension // num_heads
 
-    weights_random_max = math.sqrt(6) / embedding_dimension
-    weight_matrix_size = (embedding_dimension, embedding_dimension)
-
-    query_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
-    key_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
-    value_weights_matrix = initialize_random_weight_matrix(-weights_random_max, weights_random_max, weight_matrix_size)
-
-    # compute attention scores
-    Q_heads = np.dot(input_embeddings, query_weights_matrix)
-    K_heads = np.dot(input_embeddings, key_weights_matrix)
-    V_heads = np.dot(input_embeddings, value_weights_matrix)
-
-    Q_heads = np.reshape(Q_heads, (-1, num_heads, head_dim))
-    K_heads = np.reshape(K_heads, (-1, num_heads, head_dim))
-    V_heads = np.reshape(V_heads, (-1, num_heads, head_dim))
-
-    Q_heads_list = np.split(Q_heads, num_heads, axis=1)
-    K_heads_list = np.split(K_heads, num_heads, axis=1)
-    V_heads_list = np.split(V_heads, num_heads, axis=1)
-
-    attention_outputs = []
-    for i in range(num_heads):
-        Q_head = np.squeeze(Q_heads_list[i], axis=1)
-        K_head = np.squeeze(K_heads_list[i], axis=1)
-        V_head = np.squeeze(V_heads_list[i], axis=1)
-        raw_attention_scores = np.dot(Q_head, K_head.T)
-        raw_attention_scores /= np.sqrt(head_dim) # apply scaling
-
-        mask = np.triu(np.ones_like(raw_attention_scores), k=1) * -1e9
-        raw_attention_scores += mask
-
-
-        attention_weights = np.exp(raw_attention_scores) / np.sum(np.exp(raw_attention_scores), axis=1, keepdims=True)
-
-        row_sums = np.sum(attention_weights, axis=1)
-        assert np.allclose(row_sums, np.ones(attention_weights.shape[0]))
-
-        attention_output = np.dot(attention_weights, V_head)
-        attention_outputs.append(attention_output)
-
-    concatenated_attention_output = np.concatenate(attention_outputs, axis=-1)
-
-    assert concatenated_attention_output.shape[-1] == embedding_dimension
-
-    learning_weigth_matrix = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
-    learning_weigth_matrix = np.dot(concatenated_attention_output, learning_weigth_matrix)
-
-    
+    self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
+    batch_size = 128
+    self_attention_layer.W_o.reshape(1, input_sequence_length, embedding_dimension)
+    pass
 
 if __name__ == "__main__":
     main()
