@@ -1,5 +1,6 @@
 import math
 import os
+import argparse  # Add argparse import
 from typing import Union
 import numpy as np
 import pickle
@@ -207,10 +208,15 @@ def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Transformer Encoder")
+    parser.add_argument('-load_encodings', type=str, help='Path to the encodings file')
+    args = parser.parse_args()
+
     working_dir = os.getcwd()
     training_dataset_path = os.path.join(working_dir, "data", "polish_novel.txt")
     user_data_dir = os.path.join(working_dir, "user_data")
-    encodings_file = os.path.join(user_data_dir, "encodings_data.dat")
+    
+    encodings_file = args.load_encodings if args.load_encodings else os.path.join(user_data_dir, "encodings_data.dat")
 
     transformer_encoder = TransformerEncoder()
 
@@ -219,13 +225,8 @@ def main():
         training_text = file.read()
         # print(training_text)
 
-    if os.path.exists(encodings_file):
-        load_encodings_file = input("Do you want to load existing encodings file? (y/n) ") == "y"
-    else:
-        load_encodings_file = False
-
     # build or load encodings
-    if load_encodings_file:
+    if args.load_encodings:
         print(f"Loading encodings from file {encodings_file}...")
         transformer_encoder.load_encodings(encodings_file)
     else:
@@ -245,9 +246,15 @@ def main():
     embedding_dimension = transformer_encoder.get_embedding_dimension()
 
     self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
-    batch_size = 128
+
+    # apply the position-wise feed-forward layer
+    hidden_dimension = embedding_dimension * 4
+
     self_attention_layer.W_o.reshape(1, input_sequence_length, embedding_dimension)
-    pass
+
+
+
+    breakpoint()
 
 if __name__ == "__main__":
     main()
