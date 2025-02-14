@@ -49,7 +49,7 @@ class TransformerEncoder:
         # build encoding lookup table
         self.char_encoding_lookup_table = {}
         for i, char in enumerate(sorted(set(training_text))):
-            uid = i + self.reserved_encodings_count
+            uid = int(i + self.reserved_encodings_count)
             self.char_encoding_lookup_table[char] = uid
 
         # build decoding lookup table
@@ -120,6 +120,19 @@ class TransformerEncoder:
             encoded_training_text[i] = embedding_vector
 
         return encoded_training_text
+    
+    def encode_to_token_id(self, text: str):
+        token_ids = np.zeros(len(text), dtype=int)
+        for i, char in enumerate(text):
+            try:
+                char_id = self.char_encoding_lookup_table[char]
+            except KeyError as e:
+                print(f"KeyError: character not found in the encoding lookup table: {e}")
+                char_id = self.reserved_encodings["unknown_char"]["encoded"]
+            
+            token_ids[i] = char_id
+
+        return token_ids
 
     def decode(self, encoded_text: list[int]):
         decoded_text = ""
@@ -227,14 +240,14 @@ class FeedForwardLayer():
 
 class LayerNorm():
     def __init__(self, self_attention_layer_output, FFN_output):
-        residual_connection = self_attention_layer_output + FFN_output
-        mean = np.mean(residual_connection, axis=-1, keepdims=True)
-        variance = np.var(residual_connection, axis=-1, keepdims=True)
+        self.residual_connection = self_attention_layer_output + FFN_output # this should be computed before layer norm initialization and passed as input to it
+        self.mean = np.mean(self.residual_connection, axis=-1, keepdims=True)
+        self.variance = np.var(self.residual_connection, axis=-1, keepdims=True)
         epsilon = np.finfo(float).eps
-        learnable_scale_param = 1
-        learnable_shift_param = 0
+        self.gamma = 1 # learnable scale parameter
+        self.beta = 0 # learnable shift parameter
 
-        self.output = (residual_connection - mean) / np.sqrt(variance + epsilon) * learnable_scale_param + learnable_shift_param
+        self.output = (self.residual_connection - self.mean) / np.sqrt(self.variance + epsilon) * self.gamma + self.beta
 
 def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
     encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
@@ -273,20 +286,20 @@ def main():
     test_encoding_and_decoding(transformer_encoder, training_text)
 
     training_chunk_size = 128
-    training_chunks_num = len(training_text)
+    training_text_length = len(training_text)
 
     # generate training data chunks
-    training_text_chunks_list = []
-    for i in range(training_chunks_num // training_chunk_size):
-        chunk_start = i*training_chunk_size
-        chunk_end = min(chunk_start + training_chunk_size, training_chunks_num)
+    training_tokens_chunk_list = []
+    for training_chunk_num in range(training_text_length // training_chunk_size):
+        chunk_start = training_chunk_num*training_chunk_size
+        chunk_end = min(chunk_start + training_chunk_size, training_text_length)
         
         text_chunk = training_text[chunk_start:chunk_end]
-        training_text_chunks_list.append(text_chunk)
+        training_tokens_chunk_list.append(text_chunk)
 
-    for training_text_chunk in training_text_chunks_list:
+    for training_chunk_num, training_target_tokens in enumerate(training_tokens_chunk_list):
         # encode input to embeddings
-        input_embeddings = transformer_encoder.encode(training_text_chunk)
+        input_embeddings = transformer_encoder.encode(training_target_tokens)
         input_sequence_length = input_embeddings.shape[0]
 
         # build self-attention layer
@@ -314,9 +327,65 @@ def main():
         layer_norm_output.reshape(1, input_sequence_length, embedding_dimension)
 
         logits = np.dot(layer_norm_output, W_vocab) + b_vocab
-        probabilities = softmax(logits)
-        predicted_tokens = np.argmax(probabilities, axis=-1)
+        predicted_probabilities = softmax(logits)
+        predicted_tokens = np.argmax(predicted_probabilities, axis=-1)
 
+        training_target_token_id = transformer_encoder.encode_to_token_id(training_target_tokens[1:])
+        
+        if training_chunk_num + 1 > len(training_tokens_chunk_list):
+            last_token = training_tokens_chunk_list[training_chunk_num + 1][0]
+            last_token_id = transformer_encoder.encode_to_token_id(last_token)
+            training_target_token_id = np.append(training_target_token_id, last_token_id)
+        else:
+            # discard last generated token without ground truth in data set
+            predicted_tokens = predicted_tokens[:-1]
+
+        predictions_num = predicted_tokens.shape[0]
+
+        # losses = np.zeros(predictions_num)
+        # for t in range(predictions_num):
+        #     correct_id = training_target_token_id[t]
+
+        #     p_correct = predicted_probabilities[t, correct_id]
+        #     loss = -np.log(p_correct)
+        #     losses[t] = loss
+
+        # loss = np.mean(losses)
+
+        epsilon = np.finfo(float).eps
+        correct_probs = predicted_probabilities[np.arange(predictions_num), training_target_token_id]
+        loss = -np.mean(np.log(correct_probs + epsilon))
+
+        # prepare AdamW tensor buffers for backward pass
+        W_q_mean = np.zeros((embedding_dimension, embedding_dimension))
+        W_q_variance = np.zeros((embedding_dimension, embedding_dimension))
+        W_k_mean = np.zeros((embedding_dimension, embedding_dimension))
+        W_k_variance = np.zeros((embedding_dimension, embedding_dimension))
+        W_v_mean = np.zeros((embedding_dimension, embedding_dimension))
+        W_v_variance = np.zeros((embedding_dimension, embedding_dimension))
+        W_vocab_mean = np.zeros((embedding_dimension, vocab_size))
+        W_vocab_variance = np.zeros((embedding_dimension, vocab_size))
+
+
+        # final linear transformation
+        one_hot_ground_truth = np.zeros_like(predicted_probabilities)
+        one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
+
+        gradient_loss_logits = predicted_probabilities - one_hot_ground_truth
+
+        W_vocab = np.dot(layer_norm_output.T, gradient_loss_logits)
+        b_vocab = np.sum(gradient_loss_logits, axis=0)
+
+        # layer norm
+        N = layer_norm.residual_connection.shape[1]
+
+        gradient_loss_layer_norm_output = np.dot(gradient_loss_logits, W_vocab.T)
+        gradient_loss_gamma = np.sum(gradient_loss_layer_norm_output * (layer_norm.residual_connection - layer_norm.mean) / (layer_norm.variance + epsilon), axis=0)
+        gradient_loss_beta = np.sum(gradient_loss_layer_norm_output, axis=0)
+        gradient_loss_h = (1.0 / N)
+
+
+        pass
     pass
 
 if __name__ == "__main__":
