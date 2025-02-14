@@ -165,7 +165,7 @@ class TransformerEncoder:
             self.char_decoding_lookup_table = encodings["decoding_lookup_table"]
             self.reserved_encodings = encodings["reserved_encodings"]
 
-class SelfAttentionLayer():
+class SelfAttentionLayer:
     def __init__(self, layer_input, embedding_dimension, heads_count):
         head_dim = embedding_dimension // heads_count
         weight_matrix_size = (embedding_dimension, embedding_dimension)
@@ -175,17 +175,17 @@ class SelfAttentionLayer():
         self.W_v = initialize_random_weight_matrix(weight_matrix_size)
 
         # compute attention scores
-        Q_heads = np.dot(layer_input, self.W_q)
-        K_heads = np.dot(layer_input, self.W_k)
-        V_heads = np.dot(layer_input, self.W_v)
+        Q = np.dot(layer_input, self.W_q)
+        K = np.dot(layer_input, self.W_k)
+        V = np.dot(layer_input, self.W_v)
 
-        Q_heads = np.reshape(Q_heads, (-1, heads_count, head_dim))
-        K_heads = np.reshape(K_heads, (-1, heads_count, head_dim))
-        V_heads = np.reshape(V_heads, (-1, heads_count, head_dim))
+        Q = np.reshape(Q, (-1, heads_count, head_dim))
+        K = np.reshape(K, (-1, heads_count, head_dim))
+        V = np.reshape(V, (-1, heads_count, head_dim))
 
-        Q_heads_list = np.split(Q_heads, heads_count, axis=1)
-        K_heads_list = np.split(K_heads, heads_count, axis=1)
-        V_heads_list = np.split(V_heads, heads_count, axis=1)
+        Q_heads_list = np.split(Q, heads_count, axis=1)
+        K_heads_list = np.split(K, heads_count, axis=1)
+        V_heads_list = np.split(V, heads_count, axis=1)
 
         attention_outputs = []
         for i in range(heads_count):
@@ -216,7 +216,7 @@ class SelfAttentionLayer():
         self.output = np.dot(concatenated_attention_output, self.output)
 
 
-class FeedForwardLayer():
+class FeedForwardLayer:
     def __init__(self, layer_input, embedding_dimension, input_sequence_length):
         self.hidden_dimension = embedding_dimension * 4
 
