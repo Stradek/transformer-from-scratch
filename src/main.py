@@ -149,14 +149,13 @@ class TransformerEncoder:
 
         return decoded_text
 
-    def save_encodings(self, filepath: str):
-        encodings = {
+    def get_transformer_encoding_data(self, filepath: str):
+        data = {
             "encoding_lookup_table": self.char_encoding_lookup_table,
             "decoding_lookup_table": self.char_decoding_lookup_table,
             "reserved_encodings": self.reserved_encodings
         }
-        with open(filepath, "wb") as file:
-            pickle.dump(encodings, file)
+        return data
 
     def load_encodings(self, filepath: str):
         with open(filepath, "rb") as file:
@@ -280,7 +279,11 @@ def main():
     else:
         print("Building encodings from scratch...")
         transformer_encoder.build_vocabulary(training_text)
-        transformer_encoder.save_encodings(encodings_file)
+
+        encoding_data = transformer_encoder.get_transformer_encoding_data(encodings_file)
+        with open(encodings_file, "wb") as file:
+            pickle.dump(encoding_data, file)
+
 
     # test encoding and decoding
     test_encoding_and_decoding(transformer_encoder, training_text)
