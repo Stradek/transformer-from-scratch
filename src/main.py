@@ -166,7 +166,7 @@ class TransformerEncoder:
             self.reserved_encodings = encodings["reserved_encodings"]
 
 class SelfAttentionLayer():
-    def __init__(self, input_embeddings, embedding_dimension, heads_count):
+    def __init__(self, layer_input, embedding_dimension, heads_count):
         head_dim = embedding_dimension // heads_count
         weight_matrix_size = (embedding_dimension, embedding_dimension)
 
@@ -175,9 +175,9 @@ class SelfAttentionLayer():
         self.W_v = initialize_random_weight_matrix(weight_matrix_size)
 
         # compute attention scores
-        Q_heads = np.dot(input_embeddings, self.W_q)
-        K_heads = np.dot(input_embeddings, self.W_k)
-        V_heads = np.dot(input_embeddings, self.W_v)
+        Q_heads = np.dot(layer_input, self.W_q)
+        K_heads = np.dot(layer_input, self.W_k)
+        V_heads = np.dot(layer_input, self.W_v)
 
         Q_heads = np.reshape(Q_heads, (-1, heads_count, head_dim))
         K_heads = np.reshape(K_heads, (-1, heads_count, head_dim))
@@ -217,28 +217,28 @@ class SelfAttentionLayer():
 
 
 class FeedForwardLayer():
-    def __init__(self, self_attention_layer_output, embedding_dimension, input_sequence_length):
+    def __init__(self, layer_input, embedding_dimension, input_sequence_length):
         self.hidden_dimension = embedding_dimension * 4
 
-        self_attention_layer_output.reshape(1, input_sequence_length, embedding_dimension)
+        layer_input.reshape(1, input_sequence_length, embedding_dimension)
 
-        W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
+        self.W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
         b_1 = np.zeros(self.hidden_dimension)
 
-        W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
+        self.W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
         b_2 = np.zeros(embedding_dimension)
 
-        self.H = np.dot(self_attention_layer_output, W_1) + b_1
+        self.H = np.dot(layer_input, self.W_1) + b_1
         shape_H = self.H.shape
         
         # standard Gaussian cumulative distribution function (CDF) approximation
         CDF_distribution = np.full(shape_H, np.e)**-self.H
-        H_GELU = self.H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+        self.H_GELU = self.H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
 
-        self.output = np.dot(H_GELU, W_2) + b_2
+        self.output = np.dot(self.H_GELU, self.W_2) + b_2
 
 
-class LayerNorm():
+class LayerNorm:
     def __init__(self, self_attention_layer_output, FFN_output):
         self.residual_connection = self_attention_layer_output + FFN_output # this should be computed before layer norm initialization and passed as input to it
         self.mean = np.mean(self.residual_connection, axis=-1, keepdims=True)
@@ -306,27 +306,29 @@ def main():
         heads_count = 8
         embedding_dimension = transformer_encoder.get_embedding_dimension()
 
-        self_attention_layer = SelfAttentionLayer(input_embeddings, embedding_dimension, heads_count)
+        self_attention_layer_input = input_embeddings
+        self_attention_layer = SelfAttentionLayer(self_attention_layer_input, embedding_dimension, heads_count)
         self_attention_layer_output = self_attention_layer.output
         
         # apply the position-wise feed-forward layer
-        feedforward_layer = FeedForwardLayer(self_attention_layer_output, embedding_dimension, input_sequence_length)
-        FFN_output = feedforward_layer.output
+        ffn_input = self_attention_layer_output
+        feedforward_layer = FeedForwardLayer(ffn_input, embedding_dimension, input_sequence_length)
+        ffn_output = feedforward_layer.output
         
         # normalize layers
-        layer_norm = LayerNorm(self_attention_layer_output, FFN_output)
+        layer_norm = LayerNorm(self_attention_layer_output, ffn_output)
         layer_norm_output = layer_norm.output
 
         # apply final linear transformation (projection to vocabulary space)
         vocab_size = transformer_encoder.vocabulary_size
         hidden_dimension = feedforward_layer.hidden_dimension
 
-        W_vocab = initialize_random_weight_matrix((embedding_dimension, vocab_size))
-        b_vocab = np.zeros(vocab_size)
+        gradient_W_vocab = initialize_random_weight_matrix((embedding_dimension, vocab_size))
+        gradient_b_vocab = np.zeros(vocab_size)
 
         layer_norm_output.reshape(1, input_sequence_length, embedding_dimension)
 
-        logits = np.dot(layer_norm_output, W_vocab) + b_vocab
+        logits = np.dot(layer_norm_output, gradient_W_vocab) + gradient_b_vocab
         predicted_probabilities = softmax(logits)
         predicted_tokens = np.argmax(predicted_probabilities, axis=-1)
 
@@ -366,24 +368,42 @@ def main():
         W_vocab_mean = np.zeros((embedding_dimension, vocab_size))
         W_vocab_variance = np.zeros((embedding_dimension, vocab_size))
 
-
         # final linear transformation
         one_hot_ground_truth = np.zeros_like(predicted_probabilities)
         one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
 
         gradient_loss_logits = predicted_probabilities - one_hot_ground_truth
 
-        W_vocab = np.dot(layer_norm_output.T, gradient_loss_logits)
-        b_vocab = np.sum(gradient_loss_logits, axis=0)
+        gradient_W_vocab = np.dot(layer_norm_output.T, gradient_loss_logits)
+        gradient_b_vocab = np.sum(gradient_loss_logits, axis=0)
 
-        # layer norm
+        # norm layer
         N = layer_norm.residual_connection.shape[1]
 
-        gradient_loss_layer_norm_output = np.dot(gradient_loss_logits, W_vocab.T)
+        variance_inv = 1 / layer_norm.variance
+        x_centered = layer_norm.residual_connection - layer_norm.mean
+
+        gradient_loss_layer_norm_output = np.dot(gradient_loss_logits, gradient_W_vocab.T)
         gradient_loss_gamma = np.sum(gradient_loss_layer_norm_output * (layer_norm.residual_connection - layer_norm.mean) / (layer_norm.variance + epsilon), axis=0)
         gradient_loss_beta = np.sum(gradient_loss_layer_norm_output, axis=0)
-        gradient_loss_h = (1.0 / N)
+        gradient_loss_h = (1.0 / N) * layer_norm.gamma * np.sqrt(layer_norm.variance + epsilon) * (
+            N * gradient_loss_layer_norm_output
+            - np.sum(gradient_loss_layer_norm_output, axis=-1, keepdims=True)
+            - x_centered * variance_inv**2 * np.sum(gradient_loss_layer_norm_output * x_centered, axis=-1, keepdims=True)
+        )
 
+        # feedforward layer
+        gradient_loss_ffn_output = gradient_loss_h  
+        gradient_loss_W_2 = np.dot(ffn_output.T, gradient_loss_h)
+        gradient_loss_b_2 = np.sum(gradient_loss_h, axis=0)
+
+        # gelu
+        # gelu_derivative =
+        
+        # gradient_loss_ffn_input = np.dot(feedforward_layer.H, feedforward_layer.W_2) * gelu_derivative
+        # gradient_W_1 = np.dot(layer_norm_output.T, gradient_loss_ffn_input)
+        # gradient_b_1 = np.sum(gradient_loss_ffn_input, axis=0)
+        # gradient_loss_feedforward_input = np.dot(gradient_loss_ffn_input, feedforward_layer.W_1)
 
         pass
     pass
