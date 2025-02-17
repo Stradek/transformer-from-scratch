@@ -161,6 +161,26 @@ class TransformerEncoder:
             self.char_decoding_lookup_table = encodings["decoding_lookup_table"]
             self.reserved_encodings = encodings["reserved_encodings"]
 
+
+def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
+    encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
+    decoded_text = transformer_encoder.decode(encoded_text)
+    assert training_text == decoded_text
+
+
+class LayerNorm:
+    def __init__(self):
+        self.gamma = 1 # learnable scale parameter
+        self.beta = 0 # learnable shift parameter
+
+    def forward(self, input_matrix):
+        mean = np.mean(input_matrix, axis=-1, keepdims=True)
+        variance = np.var(input_matrix, axis=-1, keepdims=True)
+        epsilon = np.finfo(float).eps
+
+        return (input_matrix - mean) / np.sqrt(variance + epsilon) * self.gamma + self.beta
+
+
 class SelfAttentionLayer:
     def __init__(self, embedding_dimension, heads_count):
         self.heads_count = heads_count
@@ -216,12 +236,11 @@ class SelfAttentionLayer:
 
 
 class FeedForwardLayer: 
-    def __init__(self, embedding_dimension):
-        self.hidden_dimension = embedding_dimension * 4
-
+    def __init__(self, embedding_dimension, hidden_dimension):
+        self.hidden_dimension = hidden_dimension
         self.W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
-        self.b_1 = np.zeros(self.hidden_dimension)
         self.W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
+        self.b_1 = np.zeros(self.hidden_dimension)
         self.b_2 = np.zeros(embedding_dimension)
 
     def forward(self, input_matrix):
@@ -244,21 +263,9 @@ class FeedForwardLayer:
         return input_tensor * 0.5 * (1 + np.tanh(inner))
 
 
-class LayerNorm:
-    def __init__(self, self_attention_layer_output, FFN_output):
-        self.residual_connection = self_attention_layer_output + FFN_output # this should be computed before layer norm initialization and passed as input to it
-        self.mean = np.mean(self.residual_connection, axis=-1, keepdims=True)
-        self.variance = np.var(self.residual_connection, axis=-1, keepdims=True)
-        epsilon = np.finfo(float).eps
-        self.gamma = 1 # learnable scale parameter
-        self.beta = 0 # learnable shift parameter
-
-        self.output = (self.residual_connection - self.mean) / np.sqrt(self.variance + epsilon) * self.gamma + self.beta
-
-def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training_text: str):
-    encoded_text = transformer_encoder.encode(training_text, use_positional_encoding=False)
-    decoded_text = transformer_encoder.decode(encoded_text)
-    assert training_text == decoded_text
+class OutputProjectionLayer:
+    def __init__(self):
+        pass
 
 
 def main():
@@ -298,59 +305,72 @@ def main():
 
     # generate training data chunks
     training_tokens_chunk_list = []
-    for training_chunk_num in range(training_text_length // training_chunk_size):
-        chunk_start = training_chunk_num*training_chunk_size
+    for training_chunk_index in range(training_text_length // training_chunk_size):
+        chunk_start = training_chunk_index*training_chunk_size
         chunk_end = min(chunk_start + training_chunk_size, training_text_length)
         text_chunk = training_text[chunk_start:chunk_end]
 
         training_tokens_chunk_list.append(text_chunk)
 
-    for training_chunk_num, training_target_tokens in enumerate(training_tokens_chunk_list):
+    # initialize layer norm
+    layer_norm = LayerNorm()
+
+    # initialize self-attention layer
+    heads_count = 8
+    embedding_dimension = transformer_encoder.get_embedding_dimension()
+    
+    self_attention_layer = SelfAttentionLayer(embedding_dimension, heads_count)
+
+    # initialize feed-forward layer
+    hidden_dimension = embedding_dimension * 4
+
+    feedforward_layer = FeedForwardLayer(embedding_dimension, hidden_dimension)
+
+    for training_chunk_index, training_target_tokens in enumerate(training_tokens_chunk_list):
         # encode input to embeddings
         input_embeddings = transformer_encoder.encode(training_target_tokens)
         input_sequence_length = input_embeddings.shape[0]
 
-        # build self-attention layer
-        heads_count = 8
-        embedding_dimension = transformer_encoder.get_embedding_dimension()
-        
-        self_attention_layer = SelfAttentionLayer(embedding_dimension, heads_count)
-
+        # forward through self-attention layer
         self_attention_layer_input = input_embeddings
         self_attention_layer_output = self_attention_layer.forward(self_attention_layer_input)
+        self_attention_layer_output = layer_norm.forward(self_attention_layer_output)
         
-        # apply the position-wise feed-forward layer
-        feedforward_layer = FeedForwardLayer(embedding_dimension)
-        
+        # forward through feed-forward layer
         ffn_input = self_attention_layer_output
         ffn_output = feedforward_layer.forward(ffn_input)
-        
-        # normalize layers
-        layer_norm = LayerNorm(self_attention_layer_output, ffn_output)
-        layer_norm_output = layer_norm.output
+        ffn_output = layer_norm.forward(ffn_input)
 
         # apply final linear transformation (projection to vocabulary space)
         vocab_size = transformer_encoder.vocabulary_size
-        hidden_dimension = feedforward_layer.hidden_dimension
 
         gradient_W_vocab = initialize_random_weight_matrix((embedding_dimension, vocab_size))
         gradient_b_vocab = np.zeros(vocab_size)
 
-        layer_norm_output.reshape(1, input_sequence_length, embedding_dimension)
-
-        logits = np.dot(layer_norm_output, gradient_W_vocab) + gradient_b_vocab
+        logits = np.dot(ffn_output, gradient_W_vocab) + gradient_b_vocab
         predicted_probabilities = softmax(logits)
         predicted_tokens = np.argmax(predicted_probabilities, axis=-1)
 
-        training_target_token_id = transformer_encoder.encode_to_token_id(training_target_tokens[1:])
+
+        # training
+        target_tokens = training_target_tokens[1:]
+        training_target_token_id = transformer_encoder.encode_to_token_id(target_tokens)
         
-        if training_chunk_num + 1 > len(training_tokens_chunk_list):
-            last_token = training_tokens_chunk_list[training_chunk_num + 1][0]
-            last_token_id = transformer_encoder.encode_to_token_id(last_token)
-            training_target_token_id = np.append(training_target_token_id, last_token_id)
+        mask = np.ones(predicted_probabilities.shape[0])  
+
+        if training_chunk_index < len(training_tokens_chunk_list) - 1:
+            # add first token from next batch to target_tokens
+            # it's because we input tokens n, n+1, n+2, ..., n+127
+            # but we get predictions for n+1, n+2, n+3, ..., n+128, where n+128 is 
+            # last predicted token with ground truth in token n of the next batch
+            next_batch_token = training_tokens_chunk_list[training_chunk_index + 1][0]
+            next_batch_token_id = transformer_encoder.encode_to_token_id(next_batch_token)
+            training_target_token_id = np.append(training_target_token_id, next_batch_token_id)
         else:
-            # discard last generated token without ground truth in data set
-            predicted_tokens = predicted_tokens[:-1]
+            # last batch 
+            # hack: add random token and mask it out
+            training_target_token_id = np.append(training_target_token_id, 0)
+            mask[-1] = 0
 
         predictions_num = predicted_tokens.shape[0]
 
@@ -364,9 +384,11 @@ def main():
 
         # loss = np.mean(losses)
 
+        one_hot_ground_truth = np.zeros(predicted_probabilities.shape)
+        one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
+
         epsilon = np.finfo(float).eps
-        correct_probs = predicted_probabilities[np.arange(predictions_num), training_target_token_id]
-        loss = -np.mean(np.log(correct_probs + epsilon))
+        loss = -np.mean(np.sum(one_hot_ground_truth * np.log(predicted_probabilities + epsilon)))
 
         # prepare AdamW tensor buffers for backward pass
         W_q_mean = np.zeros((embedding_dimension, embedding_dimension))
@@ -377,44 +399,6 @@ def main():
         W_v_variance = np.zeros((embedding_dimension, embedding_dimension))
         W_vocab_mean = np.zeros((embedding_dimension, vocab_size))
         W_vocab_variance = np.zeros((embedding_dimension, vocab_size))
-
-        # final linear transformation
-        one_hot_ground_truth = np.zeros_like(predicted_probabilities)
-        one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
-
-        gradient_loss_logits = predicted_probabilities - one_hot_ground_truth
-
-        gradient_W_vocab = np.dot(layer_norm_output.T, gradient_loss_logits)
-        gradient_b_vocab = np.sum(gradient_loss_logits, axis=0)
-
-        # norm layer
-        N = layer_norm.residual_connection.shape[1]
-
-        variance_inv = 1 / layer_norm.variance
-        x_centered = layer_norm.residual_connection - layer_norm.mean
-
-        gradient_loss_layer_norm_output = np.dot(gradient_loss_logits, gradient_W_vocab.T)
-        gradient_loss_gamma = np.sum(gradient_loss_layer_norm_output * (layer_norm.residual_connection - layer_norm.mean) / (layer_norm.variance + epsilon), axis=0)
-        gradient_loss_beta = np.sum(gradient_loss_layer_norm_output, axis=0)
-        gradient_loss_h = (1.0 / N) * layer_norm.gamma * np.sqrt(layer_norm.variance + epsilon) * (
-            N * gradient_loss_layer_norm_output
-            - np.sum(gradient_loss_layer_norm_output, axis=-1, keepdims=True)
-            - x_centered * variance_inv**2 * np.sum(gradient_loss_layer_norm_output * x_centered, axis=-1, keepdims=True)
-        )
-
-        # feedforward layer
-        gradient_loss_ffn_output = gradient_loss_h  
-        gradient_loss_W_2 = np.dot(ffn_output.T, gradient_loss_h)
-        gradient_loss_b_2 = np.sum(gradient_loss_h, axis=0)
-
-        # gelu
-        # gelu_derivative =
-        
-        # gradient_loss_ffn_input = np.dot(feedforward_layer.H, feedforward_layer.W_2) * gelu_derivative
-        # gradient_W_1 = np.dot(layer_norm_output.T, gradient_loss_ffn_input)
-        # gradient_b_1 = np.sum(gradient_loss_ffn_input, axis=0)
-        # gradient_loss_feedforward_input = np.dot(gradient_loss_ffn_input, feedforward_layer.W_1)
-
         pass
     pass
 
