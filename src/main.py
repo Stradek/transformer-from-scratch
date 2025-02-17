@@ -12,12 +12,9 @@ def initialize_random_weight_matrix(size):
     weight_matrix = np.random.uniform(-limit, limit, size)
     return weight_matrix
 
-
 def softmax(input_matrix):
     return np.exp(input_matrix) / np.sum(np.exp(input_matrix), axis=1, keepdims=True)
     
-
-
 class TransformerEncoder:
     def __init__(self):
         self.embedding_dimension = 128
@@ -165,34 +162,38 @@ class TransformerEncoder:
             self.reserved_encodings = encodings["reserved_encodings"]
 
 class SelfAttentionLayer:
-    def __init__(self, layer_input, embedding_dimension, heads_count):
-        head_dim = embedding_dimension // heads_count
+    def __init__(self, embedding_dimension, heads_count):
+        self.heads_count = heads_count
+        self.embedding_dimension = embedding_dimension
+        self.head_dim = embedding_dimension // heads_count
         weight_matrix_size = (embedding_dimension, embedding_dimension)
 
         self.W_q = initialize_random_weight_matrix(weight_matrix_size)
         self.W_k = initialize_random_weight_matrix(weight_matrix_size)
         self.W_v = initialize_random_weight_matrix(weight_matrix_size)
+        self.W_o = initialize_random_weight_matrix(weight_matrix_size)
 
+    def forward(self, input_matrix):
         # compute attention scores
-        Q = np.dot(layer_input, self.W_q)
-        K = np.dot(layer_input, self.W_k)
-        V = np.dot(layer_input, self.W_v)
+        Q = np.dot(input_matrix, self.W_q)
+        K = np.dot(input_matrix, self.W_k)
+        V = np.dot(input_matrix, self.W_v)
 
-        Q = np.reshape(Q, (-1, heads_count, head_dim))
-        K = np.reshape(K, (-1, heads_count, head_dim))
-        V = np.reshape(V, (-1, heads_count, head_dim))
+        Q = np.reshape(Q, (-1, self.heads_count, self.head_dim))
+        K = np.reshape(K, (-1, self.heads_count, self.head_dim))
+        V = np.reshape(V, (-1, self.heads_count, self.head_dim))
 
-        Q_heads_list = np.split(Q, heads_count, axis=1)
-        K_heads_list = np.split(K, heads_count, axis=1)
-        V_heads_list = np.split(V, heads_count, axis=1)
+        Q_heads_list = np.split(Q, self.heads_count, axis=1)
+        K_heads_list = np.split(K, self.heads_count, axis=1)
+        V_heads_list = np.split(V, self.heads_count, axis=1)
 
         attention_outputs = []
-        for i in range(heads_count):
+        for i in range(self.heads_count):
             Q_head = np.squeeze(Q_heads_list[i], axis=1)
             K_head = np.squeeze(K_heads_list[i], axis=1)
             V_head = np.squeeze(V_heads_list[i], axis=1)
             raw_attention_scores = np.dot(Q_head, K_head.T)
-            raw_attention_scores /= np.sqrt(head_dim)  # apply scaling
+            raw_attention_scores /= np.sqrt(self.head_dim)  # apply scaling
 
             # numerical stability trick
             max_raw_attention_scores = np.max(raw_attention_scores, axis=1, keepdims=True)
@@ -209,32 +210,38 @@ class SelfAttentionLayer:
 
         concatenated_attention_output = np.concatenate(attention_outputs, axis=-1)
 
-        assert concatenated_attention_output.shape[-1] == embedding_dimension
+        assert concatenated_attention_output.shape[-1] == self.embedding_dimension
 
-        self.output = np.random.uniform(-0.1, 0.1, (embedding_dimension, embedding_dimension))
-        self.output = np.dot(concatenated_attention_output, self.output)
+        return np.dot(concatenated_attention_output, self.W_o)
 
 
-class FeedForwardLayer:
-    def __init__(self, layer_input, embedding_dimension, input_sequence_length):
+class FeedForwardLayer: 
+    def __init__(self, embedding_dimension):
         self.hidden_dimension = embedding_dimension * 4
 
-        layer_input.reshape(1, input_sequence_length, embedding_dimension)
-
         self.W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
-        b_1 = np.zeros(self.hidden_dimension)
-
+        self.b_1 = np.zeros(self.hidden_dimension)
         self.W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
-        b_2 = np.zeros(embedding_dimension)
+        self.b_2 = np.zeros(embedding_dimension)
 
-        self.H = np.dot(layer_input, self.W_1) + b_1
-        shape_H = self.H.shape
-        
-        # standard Gaussian cumulative distribution function (CDF) approximation
-        CDF_distribution = np.full(shape_H, np.e)**-self.H
-        self.H_GELU = self.H * 1.702 * (np.ones(shape_H) / (np.ones(shape_H) + CDF_distribution))
+    def forward(self, input_matrix):
+        H = input_matrix @ self.W_1 + self.b_1
 
-        self.output = np.dot(self.H_GELU, self.W_2) + b_2
+        H = np.reshape(H, (1, H.shape[0], H.shape[1]))
+        H = self.apply_activation_function(H)
+        H = np.squeeze(H, axis=0)
+
+        return H @ self.W_2 + self.b_2
+
+    def apply_activation_function(self, input_tensor):
+        M_SQRT2 = 1.41421356237309504880
+        M_2_SQRTPI = 1.12837916709551257390
+
+        k_beta = M_SQRT2 * M_2_SQRTPI * 0.5
+        k_kappa = 0.044715
+        input_tensor_cube = input_tensor ** 3
+        inner = k_beta * (input_tensor + k_kappa * input_tensor_cube)
+        return input_tensor * 0.5 * (1 + np.tanh(inner))
 
 
 class LayerNorm:
@@ -262,7 +269,6 @@ def main():
     working_dir = os.getcwd()
     training_dataset_path = os.path.join(working_dir, "data", "polish_novel.txt")
     user_data_dir = os.path.join(working_dir, "user_data")
-    
     encodings_file = args.load_encodings if args.load_encodings else os.path.join(user_data_dir, "encodings_data.dat")
 
     transformer_encoder = TransformerEncoder()
@@ -284,7 +290,6 @@ def main():
         with open(encodings_file, "wb") as file:
             pickle.dump(encoding_data, file)
 
-
     # test encoding and decoding
     test_encoding_and_decoding(transformer_encoder, training_text)
 
@@ -296,8 +301,8 @@ def main():
     for training_chunk_num in range(training_text_length // training_chunk_size):
         chunk_start = training_chunk_num*training_chunk_size
         chunk_end = min(chunk_start + training_chunk_size, training_text_length)
-        
         text_chunk = training_text[chunk_start:chunk_end]
+
         training_tokens_chunk_list.append(text_chunk)
 
     for training_chunk_num, training_target_tokens in enumerate(training_tokens_chunk_list):
@@ -308,15 +313,17 @@ def main():
         # build self-attention layer
         heads_count = 8
         embedding_dimension = transformer_encoder.get_embedding_dimension()
+        
+        self_attention_layer = SelfAttentionLayer(embedding_dimension, heads_count)
 
         self_attention_layer_input = input_embeddings
-        self_attention_layer = SelfAttentionLayer(self_attention_layer_input, embedding_dimension, heads_count)
-        self_attention_layer_output = self_attention_layer.output
+        self_attention_layer_output = self_attention_layer.forward(self_attention_layer_input)
         
         # apply the position-wise feed-forward layer
+        feedforward_layer = FeedForwardLayer(embedding_dimension)
+        
         ffn_input = self_attention_layer_output
-        feedforward_layer = FeedForwardLayer(ffn_input, embedding_dimension, input_sequence_length)
-        ffn_output = feedforward_layer.output
+        ffn_output = feedforward_layer.forward(ffn_input)
         
         # normalize layers
         layer_norm = LayerNorm(self_attention_layer_output, ffn_output)
