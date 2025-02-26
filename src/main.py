@@ -350,11 +350,11 @@ def main():
 
         # forward through self-attention layer
         self_attention_layer_output = self_attention_layer.forward(input_embeddings)
-        self_attention_layer_output = layer_norm.forward(self_attention_layer_output)
+        # self_attention_layer_output = layer_norm.forward(self_attention_layer_output)
         
         # forward through feed-forward layer
         ffn_output = feedforward_layer.forward(self_attention_layer_output)
-        ffn_output = layer_norm.forward(self_attention_layer_output)
+        # ffn_output = layer_norm.forward(self_attention_layer_output)
 
         # forward through output projection layer (projection to vocabulary space)
         logits = output_projection_layer.forward(ffn_output)
@@ -369,29 +369,23 @@ def main():
 
         if training_chunk_index < len(training_tokens_chunk_list) - 1:
             # add first token from next batch to target_tokens
-            # it's because we input tokens n, n+1, n+2, ..., n+127
-            # but we get predictions for n+1, n+2, n+3, ..., n+128, where n+128 is 
-            # last predicted token with ground truth in token n of the next batch
+            # it's because when we input N tokens with id's 0, 1, 2, ..., n+127,
+            # we get predictions for next token after input token.
+            # that means we can find corresponding token id's 1, 2, 3, ..., 128, where 
+            # token with id 128 is token we didn't pass as input.
+            # ground truth for predicted token with id 128 is the token from next batch with id 0.
+
             next_batch_token = training_tokens_chunk_list[training_chunk_index + 1][0]
             next_batch_token_id = transformer_encoder.encode_to_token_id(next_batch_token)
             training_target_token_id = np.append(training_target_token_id, next_batch_token_id)
         else:
             # last batch 
-            # hack: add random token and mask it out
+            # hack: add null token and mask it out
+            
             training_target_token_id = np.append(training_target_token_id, 0)
             mask[-1] = 0
 
         predictions_num = predicted_tokens.shape[0]
-
-        # losses = np.zeros(predictions_num)
-        # for t in range(predictions_num):
-        #     correct_id = training_target_token_id[t]
-
-        #     p_correct = predicted_probabilities[t, correct_id]
-        #     loss = -np.log(p_correct)
-        #     losses[t] = loss
-
-        # loss = np.mean(losses)
 
         one_hot_ground_truth = np.zeros(predicted_token_probabilities.shape)
         one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
@@ -399,15 +393,16 @@ def main():
         epsilon = np.finfo(float).eps
         loss = -np.mean(np.sum(one_hot_ground_truth * np.log(predicted_token_probabilities + epsilon)))
 
-        # prepare AdamW tensor buffers for backward pass
-        W_q_mean = np.zeros((embedding_dimension, embedding_dimension))
-        W_q_variance = np.zeros((embedding_dimension, embedding_dimension))
-        W_k_mean = np.zeros((embedding_dimension, embedding_dimension))
-        W_k_variance = np.zeros((embedding_dimension, embedding_dimension))
-        W_v_mean = np.zeros((embedding_dimension, embedding_dimension))
-        W_v_variance = np.zeros((embedding_dimension, embedding_dimension))
-        W_vocab_mean = np.zeros((embedding_dimension, vocab_size))
-        W_vocab_variance = np.zeros((embedding_dimension, vocab_size))
+        # # prepare AdamW tensor buffers for backward pass
+        # W_q_mean = np.zeros((embedding_dimension, embedding_dimension))
+        # W_q_variance = np.zeros((embedding_dimension, embedding_dimension))
+        # W_k_mean = np.zeros((embedding_dimension, embedding_dimension))
+        # W_k_variance = np.zeros((embedding_dimension, embedding_dimension))
+        # W_v_mean = np.zeros((embedding_dimension, embedding_dimension))
+        # W_v_variance = np.zeros((embedding_dimension, embedding_dimension))
+        # W_vocab_mean = np.zeros((embedding_dimension, vocab_size))
+        # W_vocab_variance = np.zeros((embedding_dimension, vocab_size))
+        
         pass
     pass
 
