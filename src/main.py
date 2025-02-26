@@ -236,12 +236,12 @@ class SelfAttentionLayer:
 
 
 class FeedForwardLayer: 
-    def __init__(self, embedding_dimension, hidden_dimension):
-        self.hidden_dimension = hidden_dimension
-        self.W_1 = initialize_random_weight_matrix((embedding_dimension, self.hidden_dimension))
-        self.W_2 = initialize_random_weight_matrix((self.hidden_dimension, embedding_dimension))
-        self.b_1 = np.zeros(self.hidden_dimension)
-        self.b_2 = np.zeros(embedding_dimension)
+    def __init__(self, embedding_dimension_size, hidden_dimension_size):
+        self.hidden_dimension_size = hidden_dimension_size
+        self.W_1 = initialize_random_weight_matrix((embedding_dimension_size, self.hidden_dimension_size))
+        self.W_2 = initialize_random_weight_matrix((self.hidden_dimension_size, embedding_dimension_size))
+        self.b_1 = np.zeros(self.hidden_dimension_size)
+        self.b_2 = np.zeros(embedding_dimension_size)
 
     def forward(self, input_matrix):
         H = input_matrix @ self.W_1 + self.b_1
@@ -264,8 +264,21 @@ class FeedForwardLayer:
 
 
 class OutputProjectionLayer:
-    def __init__(self):
-        pass
+    def __init__(self, embedding_dimension_size, vocab_size):
+        self.W_vocab = initialize_random_weight_matrix((embedding_dimension_size, vocab_size))
+        self.b_vocab = np.zeros(vocab_size)
+
+    def forward(self, input_matrix):
+        logits = np.dot(input_matrix, self.W_vocab) + self.b_vocab
+        return logits
+
+    @staticmethod
+    def logits_to_predicted_token_probabilities(logits):
+        return softmax(logits)
+
+    @staticmethod
+    def predicted_token_probabilities_to_tokens(token_probabilities):
+        return np.argmax(token_probabilities, axis=-1)
 
 
 def main():
@@ -318,6 +331,7 @@ def main():
     # initialize self-attention layer
     heads_count = 8
     embedding_dimension = transformer_encoder.get_embedding_dimension()
+    vocab_size = transformer_encoder.vocabulary_size
     
     self_attention_layer = SelfAttentionLayer(embedding_dimension, heads_count)
 
@@ -325,6 +339,9 @@ def main():
     hidden_dimension = embedding_dimension * 4
 
     feedforward_layer = FeedForwardLayer(embedding_dimension, hidden_dimension)
+    
+    # initialize output projection layer
+    output_projection_layer = OutputProjectionLayer(embedding_dimension, vocab_size)
 
     for training_chunk_index, training_target_tokens in enumerate(training_tokens_chunk_list):
         # encode input to embeddings
@@ -332,31 +349,23 @@ def main():
         input_sequence_length = input_embeddings.shape[0]
 
         # forward through self-attention layer
-        self_attention_layer_input = input_embeddings
-        self_attention_layer_output = self_attention_layer.forward(self_attention_layer_input)
+        self_attention_layer_output = self_attention_layer.forward(input_embeddings)
         self_attention_layer_output = layer_norm.forward(self_attention_layer_output)
         
         # forward through feed-forward layer
-        ffn_input = self_attention_layer_output
-        ffn_output = feedforward_layer.forward(ffn_input)
-        ffn_output = layer_norm.forward(ffn_input)
+        ffn_output = feedforward_layer.forward(self_attention_layer_output)
+        ffn_output = layer_norm.forward(self_attention_layer_output)
 
-        # apply final linear transformation (projection to vocabulary space)
-        vocab_size = transformer_encoder.vocabulary_size
-
-        gradient_W_vocab = initialize_random_weight_matrix((embedding_dimension, vocab_size))
-        gradient_b_vocab = np.zeros(vocab_size)
-
-        logits = np.dot(ffn_output, gradient_W_vocab) + gradient_b_vocab
-        predicted_probabilities = softmax(logits)
-        predicted_tokens = np.argmax(predicted_probabilities, axis=-1)
-
+        # forward through output projection layer (projection to vocabulary space)
+        logits = output_projection_layer.forward(ffn_output)
+        predicted_token_probabilities = OutputProjectionLayer.logits_to_predicted_token_probabilities(logits)
+        predicted_tokens = OutputProjectionLayer.predicted_token_probabilities_to_tokens(logits)
 
         # training
         target_tokens = training_target_tokens[1:]
         training_target_token_id = transformer_encoder.encode_to_token_id(target_tokens)
         
-        mask = np.ones(predicted_probabilities.shape[0])  
+        mask = np.ones(predicted_token_probabilities.shape[0])  
 
         if training_chunk_index < len(training_tokens_chunk_list) - 1:
             # add first token from next batch to target_tokens
@@ -384,11 +393,11 @@ def main():
 
         # loss = np.mean(losses)
 
-        one_hot_ground_truth = np.zeros(predicted_probabilities.shape)
+        one_hot_ground_truth = np.zeros(predicted_token_probabilities.shape)
         one_hot_ground_truth[np.arange(predictions_num), training_target_token_id] = 1
 
         epsilon = np.finfo(float).eps
-        loss = -np.mean(np.sum(one_hot_ground_truth * np.log(predicted_probabilities + epsilon)))
+        loss = -np.mean(np.sum(one_hot_ground_truth * np.log(predicted_token_probabilities + epsilon)))
 
         # prepare AdamW tensor buffers for backward pass
         W_q_mean = np.zeros((embedding_dimension, embedding_dimension))
