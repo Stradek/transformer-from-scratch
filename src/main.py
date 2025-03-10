@@ -5,6 +5,9 @@ from typing import Union
 import numpy as np
 import pickle
 
+TRAINING_CHUNK_SIZE = 128
+ENCODER_EMBEDDING_DIMENSION = 128
+ENCODER_MAX_SEQUENCE_LENGTH = 2048
 
 def initialize_random_weight_matrix(size):
     dim_sum = np.sum(size)
@@ -17,8 +20,8 @@ def softmax(input_matrix):
     
 class TransformerEncoder:
     def __init__(self):
-        self.embedding_dimension = 128
-        self.max_sequence_length = 2048
+        self.embedding_dimension = ENCODER_EMBEDDING_DIMENSION
+        self.max_sequence_length = ENCODER_MAX_SEQUENCE_LENGTH
 
         self.char_encoding_lookup_table = None
         self.char_decoding_lookup_table = None
@@ -313,14 +316,13 @@ def main():
     # test encoding and decoding
     test_encoding_and_decoding(transformer_encoder, training_text)
 
-    training_chunk_size = 128
     training_text_length = len(training_text)
 
     # generate training data chunks
     training_tokens_chunk_list = []
-    for training_chunk_index in range(training_text_length // training_chunk_size):
-        chunk_start = training_chunk_index*training_chunk_size
-        chunk_end = min(chunk_start + training_chunk_size, training_text_length)
+    for training_chunk_index in range(training_text_length // TRAINING_CHUNK_SIZE):
+        chunk_start = training_chunk_index*TRAINING_CHUNK_SIZE
+        chunk_end = min(chunk_start + TRAINING_CHUNK_SIZE, training_text_length)
         text_chunk = training_text[chunk_start:chunk_end]
 
         training_tokens_chunk_list.append(text_chunk)
