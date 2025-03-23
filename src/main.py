@@ -168,15 +168,32 @@ class TransformerEncoder:
 
 class LayerNorm:
     def __init__(self):
-        self.gamma = 1 # learnable scale parameter
-        self.beta = 0 # learnable shift parameter
+        self.gamma = 1.0 # learnable scale parameter
+        self.beta = 0.0 # learnable shift parameter
+        self.epsilon = np.finfo(float).eps
 
     def forward(self, input_matrix):
-        mean = np.mean(input_matrix, axis=-1, keepdims=True)
-        variance = np.var(input_matrix, axis=-1, keepdims=True)
-        epsilon = np.finfo(float).eps
+        self.input = input_matrix
 
-        return (input_matrix - mean) / np.sqrt(variance + epsilon) * self.gamma + self.beta
+        self.mean = np.mean(input_matrix, axis=-1, keepdims=True)
+        self.variance = np.var(input_matrix, axis=-1, keepdims=True)
+        self.std = np.sqrt(self.variance + self.epsilon)
+        self.norm = (input_matrix - self.mean) / self.std
+
+        return self.gamma * self.norm + self.beta
+
+    def backward(self, d_out):
+        N = self.input.shape[-1]
+        
+        d_gamma = np.sum(d_out * self.norm, axis=0) 
+        d_beta = np.sum(d_out, axis=0)
+        d_norm = d_out * self.gamma
+        d_input = (1.0 / N) / self.std * (N * d_norm - 
+                                          np.sum(d_norm, axis=-1, keepdims=True) - 
+                                          self.norm * np.sum(d_norm * self.norm, axis=-1, keepdims=True))
+        
+        return d_input, d_gamma, d_beta
+
 
 class SelfAttentionLayer:
     def __init__(self, heads_count, embedding_dimension_size):
@@ -350,6 +367,23 @@ def main():
     self_attention_layer = SelfAttentionLayer(TRANSFORMER_HEADS_COUNT, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
     feedforward_layer = FeedForwardLayer(TRANSFORMER_EMBEDDING_DIMENSION_SIZE, TRANSFORMER_HIDDEN_DIMENSION_SIZE)
     output_projection_layer = OutputProjectionLayer(TRANSFORMER_EMBEDDING_DIMENSION_SIZE, vocab_size)
+
+    # Test LayerNorm forward and backward pass
+    test_input = np.random.rand(4, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+    original_gamma = layer_norm.gamma
+    original_beta = layer_norm.beta
+
+    norm_output = layer_norm.forward(test_input)
+
+    d_out = np.random.rand(*norm_output.shape)
+    d_input, d_gamma, d_beta = layer_norm.backward(d_out)
+
+    # Compare input, gamma, and beta
+    assert np.allclose(test_input, layer_norm.input), "Input mismatch after forward pass."
+    assert np.isclose(original_gamma, layer_norm.gamma), "Gamma mismatch after forward pass."
+    assert np.isclose(original_beta, layer_norm.beta), "Beta mismatch after forward pass."
+
+    print("LayerNorm forward and backward pass test completed successfully.")
 
     training_tokens_chunk_list = split_training_text(training_text, TRAINING_CHUNK_SIZE)
 
