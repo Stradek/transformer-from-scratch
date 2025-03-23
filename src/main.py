@@ -12,8 +12,9 @@ TRANSFORMER_HEADS_COUNT = 8
 TRANSFORMER_HIDDEN_DIMENSION_SIZE = TRANSFORMER_EMBEDDING_DIMENSION_SIZE * 4
 
 class TransformerEncoder:
-    def __init__(self, training_text: str = ""):
-        self.max_sequence_length = ENCODER_MAX_SEQUENCE_LENGTH
+    def __init__(self, max_sequence_length, embedding_dimension_size, training_text: str = ""):
+        self.max_sequence_length = max_sequence_length
+        self.embedding_dimension_size = embedding_dimension_size
 
         self.reserved_encodings = {
             "unknown_char": {
@@ -30,13 +31,13 @@ class TransformerEncoder:
 
             self.vocabulary_size = len(self.char_encoding_table)
 
-            embedding_random_value_max = 1 / math.sqrt(TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+            embedding_random_value_max = 1 / math.sqrt(self.embedding_dimension_size)
             embedding_random_value_min = -embedding_random_value_max
 
             self.embedding_matrix = np.random.uniform(
                 low=embedding_random_value_min,
                 high=embedding_random_value_max,
-                size=(self.vocabulary_size, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+                size=(self.vocabulary_size, self.embedding_dimension_size)
             )
 
             # build embedding decoding lookup table
@@ -45,13 +46,13 @@ class TransformerEncoder:
                 self.embedding_decoding_lookup_table[tuple(vector)] = i
 
             # build positional encoding matrix
-            self.positional_encoding_matrix = np.zeros((self.max_sequence_length, TRANSFORMER_EMBEDDING_DIMENSION_SIZE))
+            self.positional_encoding_matrix = np.zeros((self.max_sequence_length, self.embedding_dimension_size))
             for x in range(self.max_sequence_length):
-                for y in range(TRANSFORMER_EMBEDDING_DIMENSION_SIZE):
+                for y in range(self.embedding_dimension_size):
                     if y%2 == 0:
-                        self.positional_encoding_matrix[x][y] = math.sin(x / (10000 ** (y / TRANSFORMER_EMBEDDING_DIMENSION_SIZE)))
+                        self.positional_encoding_matrix[x][y] = math.sin(x / (10000 ** (y / self.embedding_dimension_size)))
                     else:
-                        self.positional_encoding_matrix[x][y] = math.cos(x / (10000 ** (y / TRANSFORMER_EMBEDDING_DIMENSION_SIZE)))
+                        self.positional_encoding_matrix[x][y] = math.cos(x / (10000 ** (y / self.embedding_dimension_size)))
 
     def add_reserved_characters_to_encoding_decoding_table(self):
         for name, data in self.reserved_encodings.items():
@@ -87,7 +88,7 @@ class TransformerEncoder:
         else:
             print("WARNING! Encoding without positional encoding.")
 
-        encoded_training_text = np.zeros((len(text), TRANSFORMER_EMBEDDING_DIMENSION_SIZE))
+        encoded_training_text = np.zeros((len(text), self.embedding_dimension_size))
         for i, char in enumerate(text):
             try:
                 char_id = self.char_encoding_table[char]
@@ -135,13 +136,15 @@ class TransformerEncoder:
 
         return decoded_text
 
-    def get_transformer_encoding_data(self, filepath: str):
+    def get_transformer_encoding_data(self):
         data = {
+            "max_sequence_length": self.max_sequence_length,
             "encoding_lookup_table": self.char_encoding_table,
             "decoding_lookup_table": self.char_decoding_table,
             "vocabulary_size": self.vocabulary_size,
             "reserved_encodings": self.reserved_encodings,
             "reserved_encodings_count": self.reserved_encodings_count,
+            "embedding_dimension_size": self.embedding_dimension_size,
             "embedding_matrix": self.embedding_matrix,
             "embedding_decoding_lookup_table": self.embedding_decoding_lookup_table,
             "positional_encoding_matrix": self.positional_encoding_matrix
@@ -151,11 +154,14 @@ class TransformerEncoder:
     def load_encodings(self, filepath: str):
         with open(filepath, "rb") as file:
             encodings = pickle.load(file)
+
+            self.max_sequence_length = encodings["max_sequence_length"]
             self.char_encoding_table = encodings["encoding_lookup_table"]
             self.char_decoding_table = encodings["decoding_lookup_table"]
             self.vocabulary_size = encodings["vocabulary_size"]
             self.reserved_encodings = encodings["reserved_encodings"]
             self.reserved_encodings_count = encodings["reserved_encodings_count"]
+            self.embedding_dimension_size = encodings["embedding_dimension_size"]
             self.embedding_matrix = encodings["embedding_matrix"]
             self.embedding_decoding_lookup_table = encodings["embedding_decoding_lookup_table"]
             self.positional_encoding_matrix = encodings["positional_encoding_matrix"]
@@ -274,7 +280,7 @@ def test_encoding_and_decoding(transformer_encoder: TransformerEncoder, training
     assert training_text == decoded_text
 
 def export_transformer_encodings(encodings_file, transformer_encoder):
-    encoding_data = transformer_encoder.get_transformer_encoding_data(encodings_file)
+    encoding_data = transformer_encoder.get_transformer_encoding_data()
     with open(encodings_file, "wb") as file:
         pickle.dump(encoding_data, file)
 
@@ -321,11 +327,12 @@ def main():
     # build or load encodings
     if args.load_encodings:
         print(f"Loading encodings from file {encodings_file}...")
-        transformer_encoder = TransformerEncoder()
+        transformer_encoder = TransformerEncoder(ENCODER_MAX_SEQUENCE_LENGTH, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
         transformer_encoder.load_encodings(encodings_file)
     else:
         print("Building encodings from scratch...")
-        transformer_encoder = TransformerEncoder(training_text)
+        transformer_encoder = TransformerEncoder(ENCODER_MAX_SEQUENCE_LENGTH, TRANSFORMER_EMBEDDING_DIMENSION_SIZE, 
+                                                 training_text=training_text)
 
         export_transformer_encodings(encodings_file, transformer_encoder)
 
