@@ -179,10 +179,11 @@ class LayerNorm:
         return (input_matrix - mean) / np.sqrt(variance + epsilon) * self.gamma + self.beta
 
 class SelfAttentionLayer:
-    def __init__(self, heads_count):
+    def __init__(self, heads_count, embedding_dimension_size):
         self.heads_count = heads_count
-        self.head_dim = TRANSFORMER_EMBEDDING_DIMENSION_SIZE // heads_count
-        weight_matrix_size = (TRANSFORMER_EMBEDDING_DIMENSION_SIZE, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+        self.embedding_dimension_size = embedding_dimension_size
+        self.head_dim = self.embedding_dimension_size // heads_count
+        weight_matrix_size = (self.embedding_dimension_size, self.embedding_dimension_size)
 
         self.W_q = initialize_random_weight_matrix(weight_matrix_size)
         self.W_k = initialize_random_weight_matrix(weight_matrix_size)
@@ -226,17 +227,19 @@ class SelfAttentionLayer:
 
         concatenated_attention_output = np.concatenate(attention_outputs, axis=-1)
 
-        assert concatenated_attention_output.shape[-1] == TRANSFORMER_EMBEDDING_DIMENSION_SIZE
+        assert concatenated_attention_output.shape[-1] == self.embedding_dimension_size
 
         return np.dot(concatenated_attention_output, self.W_o)
 
 class FeedForwardLayer: 
-    def __init__(self, hidden_dimension_size):
+    def __init__(self, embedding_dimension_size, hidden_dimension_size):
+        self.embedding_dimension_size = embedding_dimension_size
         self.hidden_dimension_size = hidden_dimension_size
-        self.W_1 = initialize_random_weight_matrix((TRANSFORMER_EMBEDDING_DIMENSION_SIZE, self.hidden_dimension_size))
-        self.W_2 = initialize_random_weight_matrix((self.hidden_dimension_size, TRANSFORMER_EMBEDDING_DIMENSION_SIZE))
+
+        self.W_1 = initialize_random_weight_matrix((self.embedding_dimension_size, self.hidden_dimension_size))
+        self.W_2 = initialize_random_weight_matrix((self.hidden_dimension_size, self.embedding_dimension_size))
         self.b_1 = np.zeros(self.hidden_dimension_size)
-        self.b_2 = np.zeros(TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+        self.b_2 = np.zeros(self.embedding_dimension_size)
 
     def forward(self, input_matrix):
         H = input_matrix @ self.W_1 + self.b_1
@@ -258,8 +261,10 @@ class FeedForwardLayer:
         return input_tensor * 0.5 * (1 + np.tanh(inner))
 
 class OutputProjectionLayer:
-    def __init__(self, vocab_size):
-        self.W_vocab = initialize_random_weight_matrix((TRANSFORMER_EMBEDDING_DIMENSION_SIZE, vocab_size))
+    def __init__(self, embedding_dimension_size, vocab_size):
+        self.embedding_dimension_size = embedding_dimension_size
+
+        self.W_vocab = initialize_random_weight_matrix((self.embedding_dimension_size, vocab_size))
         self.b_vocab = np.zeros(vocab_size)
 
     def forward(self, input_matrix):
@@ -293,13 +298,13 @@ def initialize_random_weight_matrix(size):
 def softmax(input_matrix):
     return np.exp(input_matrix) / np.sum(np.exp(input_matrix), axis=1, keepdims=True)
 
-def split_training_text(training_text):
+def split_training_text(training_text, training_chunk_size=128):
     training_text_length = len(training_text)
 
     training_tokens_chunk_list = []
-    for training_chunk_index in range(training_text_length // TRAINING_CHUNK_SIZE):
-        chunk_start = training_chunk_index*TRAINING_CHUNK_SIZE
-        chunk_end = min(chunk_start + TRAINING_CHUNK_SIZE, training_text_length)
+    for training_chunk_index in range(training_text_length // training_chunk_size):
+        chunk_start = training_chunk_index * training_chunk_size
+        chunk_end = min(chunk_start + training_chunk_size, training_text_length)
         text_chunk = training_text[chunk_start:chunk_end]
 
         training_tokens_chunk_list.append(text_chunk)
@@ -341,11 +346,11 @@ def main():
     vocab_size = transformer_encoder.get_vocabulary_size()
 
     layer_norm = LayerNorm()
-    self_attention_layer = SelfAttentionLayer(TRANSFORMER_HEADS_COUNT)
-    feedforward_layer = FeedForwardLayer(TRANSFORMER_HIDDEN_DIMENSION_SIZE)
-    output_projection_layer = OutputProjectionLayer(vocab_size)
+    self_attention_layer = SelfAttentionLayer(TRANSFORMER_HEADS_COUNT, TRANSFORMER_EMBEDDING_DIMENSION_SIZE)
+    feedforward_layer = FeedForwardLayer(TRANSFORMER_EMBEDDING_DIMENSION_SIZE, TRANSFORMER_HIDDEN_DIMENSION_SIZE)
+    output_projection_layer = OutputProjectionLayer(TRANSFORMER_EMBEDDING_DIMENSION_SIZE, vocab_size)
 
-    training_tokens_chunk_list = split_training_text(training_text)
+    training_tokens_chunk_list = split_training_text(training_text, TRAINING_CHUNK_SIZE)
 
     for training_chunk_index, training_target_tokens in enumerate(training_tokens_chunk_list):
         input_embeddings = transformer_encoder.encode(training_target_tokens)
