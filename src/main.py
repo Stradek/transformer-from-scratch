@@ -295,8 +295,9 @@ def initialize_random_weight_matrix(size):
     weight_matrix = np.random.uniform(-limit, limit, size)
     return weight_matrix
 
-def softmax(input_matrix):
-    return np.exp(input_matrix) / np.sum(np.exp(input_matrix), axis=1, keepdims=True)
+def softmax(x):
+    e_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+    return e_x / np.sum(e_x, axis=1, keepdims=True)
 
 def split_training_text(training_text, training_chunk_size=128):
     training_text_length = len(training_text)
